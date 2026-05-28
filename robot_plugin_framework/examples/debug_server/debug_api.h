@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rpf/plugin_manager.h"
+#include "rpf/hardware_interface.h"
 #include "httplib.h"
 #include <memory>
 #include <string>
@@ -9,7 +10,8 @@ namespace robot {
 
 class DebugAPI {
 public:
-    DebugAPI(rpf::PluginManager& plugin_manager, int port = 8080);
+    DebugAPI(rpf::PluginManager& plugin_manager, int port = 8080,
+             const std::string& hardware_plugin = "mujoco_hardware");
     ~DebugAPI();
 
     // 启动/停止服务器
@@ -19,6 +21,12 @@ public:
 
 private:
     void setupRoutes();
+
+    // 辅助函数
+    rpf::Hardware* getHardware();
+    rpf::Simulator* getSimulator();
+    void sendError(httplib::Response& res, int status, const std::string& message);
+    void sendSuccess(httplib::Response& res, const nlohmann::json& data = {});
 
     // 插件管理API
     void handleScanPlugins(const httplib::Request& req, httplib::Response& res);
@@ -48,6 +56,7 @@ private:
 
     rpf::PluginManager& plugin_manager_;
     std::unique_ptr<httplib::Server> server_;
+    std::string hardware_plugin_name_;
     int port_;
     bool running_;
     std::thread server_thread_;

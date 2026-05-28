@@ -180,35 +180,39 @@ bool PluginManager::loadPlugin(const std::string& name) {
 }
 
 bool PluginManager::unloadPlugin(const std::string& name) {
-    std::unique_lock lock(mutex_);
-
-    auto it = loaded_plugins_.find(name);
-    if (it == loaded_plugins_.end()) {
-        return false;
-    }
-
-    auto& plugin = it->second;
-
-    // 如果正在运行，先停止
-    if (plugin.state == PluginState::Running) {
-        if (plugin.instance) {
-            plugin.instance->stop();
+    // 如果正在运行，先停止（stopPlugin 内部会获取锁）
+    {
+        std::shared_lock lock(mutex_);
+        auto it = loaded_plugins_.find(name);
+        if (it == loaded_plugins_.end()) {
+            return false;
+        }
+        if (it->second.state == PluginState::Running) {
+            lock.unlock();
+            stopPlugin(name);
         }
     }
 
-    // 如果已初始化，先卸载
-    if (plugin.state != PluginState::Loaded && plugin.instance) {
-        plugin.instance->unload();
+    // 移出插件，在锁外执行卸载和销毁
+    LoadedPlugin plugin;
+    {
+        std::unique_lock lock(mutex_);
+        auto it = loaded_plugins_.find(name);
+        if (it == loaded_plugins_.end()) {
+            return false;
+        }
+        plugin = std::move(it->second);
+        loaded_plugins_.erase(it);
     }
 
-    // 销毁实例
-    if (plugin.destroy_func && plugin.instance) {
-        plugin.destroy_func(plugin.instance);
+    if (plugin.instance) {
+        plugin.instance->unload();
+        if (plugin.destroy_func) {
+            plugin.destroy_func(plugin.instance);
+        }
         plugin.instance = nullptr;
     }
 
-    plugin.state = PluginState::Unloaded;
-    loaded_plugins_.erase(it);
     return true;
 }
 
@@ -313,48 +317,76 @@ bool PluginManager::loadAll() {
 }
 
 bool PluginManager::startAll() {
-    std::shared_lock lock(mutex_);
-    for (auto& [name, plugin] : loaded_plugins_) {
-        if (plugin.state == PluginState::Loaded) {
-            lock.unlock();
-            if (!initializePlugin(name)) {
-                return false;
+    // 收集需要操作的插件名，避免持锁调用需要锁的函数
+    std::vector<std::string> to_initialize;
+    std::vector<std::string> to_start;
+    {
+        std::shared_lock lock(mutex_);
+        for (const auto& [name, plugin] : loaded_plugins_) {
+            if (plugin.state == PluginState::Loaded) {
+                to_initialize.push_back(name);
             }
-            lock.lock();
         }
-        if (plugin.state == PluginState::Initialized) {
-            lock.unlock();
-            if (!startPlugin(name)) {
-                return false;
+    }
+
+    for (const auto& name : to_initialize) {
+        if (!initializePlugin(name)) {
+            return false;
+        }
+    }
+
+    {
+        std::shared_lock lock(mutex_);
+        for (const auto& [name, plugin] : loaded_plugins_) {
+            if (plugin.state == PluginState::Initialized) {
+                to_start.push_back(name);
             }
-            lock.lock();
+        }
+    }
+
+    for (const auto& name : to_start) {
+        if (!startPlugin(name)) {
+            return false;
         }
     }
     return true;
 }
 
 bool PluginManager::stopAll() {
-    std::unique_lock lock(mutex_);
-    bool success = true;
-    for (auto& [name, plugin] : loaded_plugins_) {
-        if (plugin.state == PluginState::Running) {
-            if (!plugin.instance->stop()) {
-                success = false;
-            } else {
-                plugin.state = PluginState::Stopped;
+    // 收集需要停止的插件名，避免持锁调用插件方法
+    std::vector<std::string> to_stop;
+    {
+        std::shared_lock lock(mutex_);
+        for (const auto& [name, plugin] : loaded_plugins_) {
+            if (plugin.state == PluginState::Running) {
+                to_stop.push_back(name);
             }
+        }
+    }
+
+    bool success = true;
+    for (const auto& name : to_stop) {
+        if (!stopPlugin(name)) {
+            success = false;
         }
     }
     return success;
 }
 
 bool PluginManager::unloadAll() {
-    std::unique_lock lock(mutex_);
-    for (auto& [name, plugin] : loaded_plugins_) {
+    // 先停止所有运行中的插件
+    stopAll();
+
+    // 收集所有已加载的插件，在锁外执行卸载和销毁
+    std::map<std::string, LoadedPlugin> plugins_to_unload;
+    {
+        std::unique_lock lock(mutex_);
+        plugins_to_unload = std::move(loaded_plugins_);
+        loaded_plugins_.clear();
+    }
+
+    for (auto& [name, plugin] : plugins_to_unload) {
         if (plugin.instance) {
-            if (plugin.state == PluginState::Running) {
-                plugin.instance->stop();
-            }
             plugin.instance->unload();
             if (plugin.destroy_func) {
                 plugin.destroy_func(plugin.instance);
@@ -363,7 +395,6 @@ bool PluginManager::unloadAll() {
         }
         plugin.state = PluginState::Unloaded;
     }
-    loaded_plugins_.clear();
     return true;
 }
 

@@ -5,9 +5,37 @@
 
 namespace robot {
 
-DebugAPI::DebugAPI(rpf::PluginManager& plugin_manager, int port)
-    : plugin_manager_(plugin_manager), port_(port), running_(false) {
+DebugAPI::DebugAPI(rpf::PluginManager& plugin_manager, int port,
+                   const std::string& hardware_plugin)
+    : plugin_manager_(plugin_manager), hardware_plugin_name_(hardware_plugin),
+      port_(port), running_(false) {
     server_ = std::make_unique<httplib::Server>();
+}
+
+rpf::Hardware* DebugAPI::getHardware() {
+    auto* plugin = plugin_manager_.getPlugin(hardware_plugin_name_);
+    if (!plugin) return nullptr;
+    return static_cast<rpf::Hardware*>(plugin->getService("Hardware"));
+}
+
+rpf::Simulator* DebugAPI::getSimulator() {
+    auto* plugin = plugin_manager_.getPlugin(hardware_plugin_name_);
+    if (!plugin) return nullptr;
+    return static_cast<rpf::Simulator*>(plugin->getService("Simulator"));
+}
+
+void DebugAPI::sendError(httplib::Response& res, int status, const std::string& message) {
+    res.status = status;
+    nlohmann::json error = {{"error", message}, {"success", false}};
+    res.set_content(error.dump(2), "application/json");
+}
+
+void DebugAPI::sendSuccess(httplib::Response& res, const nlohmann::json& data) {
+    nlohmann::json result = {{"success", true}};
+    if (!data.is_null()) {
+        result.update(data);
+    }
+    res.set_content(result.dump(2), "application/json");
 }
 
 DebugAPI::~DebugAPI() {
@@ -76,27 +104,27 @@ void DebugAPI::setupRoutes() {
         handleScanPlugins(req, res);
     });
 
-    server_->Get(R"(/api/plugins/(\w+)/metadata)", [this](const httplib::Request& req, httplib::Response& res) {
+    server_->Get(R"(/api/plugins/([^/]+)/metadata)", [this](const httplib::Request& req, httplib::Response& res) {
         handleGetPluginMetadata(req, res);
     });
 
-    server_->Post(R"(/api/plugins/(\w+)/load)", [this](const httplib::Request& req, httplib::Response& res) {
+    server_->Post(R"(/api/plugins/([^/]+)/load)", [this](const httplib::Request& req, httplib::Response& res) {
         handleLoadPlugin(req, res);
     });
 
-    server_->Post(R"(/api/plugins/(\w+)/unload)", [this](const httplib::Request& req, httplib::Response& res) {
+    server_->Post(R"(/api/plugins/([^/]+)/unload)", [this](const httplib::Request& req, httplib::Response& res) {
         handleUnloadPlugin(req, res);
     });
 
-    server_->Post(R"(/api/plugins/(\w+)/start)", [this](const httplib::Request& req, httplib::Response& res) {
+    server_->Post(R"(/api/plugins/([^/]+)/start)", [this](const httplib::Request& req, httplib::Response& res) {
         handleStartPlugin(req, res);
     });
 
-    server_->Post(R"(/api/plugins/(\w+)/stop)", [this](const httplib::Request& req, httplib::Response& res) {
+    server_->Post(R"(/api/plugins/([^/]+)/stop)", [this](const httplib::Request& req, httplib::Response& res) {
         handleStopPlugin(req, res);
     });
 
-    server_->Get(R"(/api/plugins/(\w+)/state)", [this](const httplib::Request& req, httplib::Response& res) {
+    server_->Get(R"(/api/plugins/([^/]+)/state)", [this](const httplib::Request& req, httplib::Response& res) {
         handleGetPluginState(req, res);
     });
 
@@ -109,7 +137,7 @@ void DebugAPI::setupRoutes() {
         handleGetRobotState(req, res);
     });
 
-    server_->Post(R"(/api/robot/joints/(\w+)/position)", [this](const httplib::Request& req, httplib::Response& res) {
+    server_->Post(R"(/api/robot/joints/([^/]+)/position)", [this](const httplib::Request& req, httplib::Response& res) {
         handleSetJointPosition(req, res);
     });
 
@@ -171,8 +199,7 @@ void DebugAPI::handleGetPluginMetadata(const httplib::Request& req, httplib::Res
         nlohmann::json j = meta;
         res.set_content(j.dump(2), "application/json");
     } catch (const std::exception& e) {
-        res.status = 404;
-        res.set_content(R"({"error": "Plugin not found"})", "application/json");
+        sendError(res, 404, "Plugin not found");
     }
 }
 
@@ -241,17 +268,9 @@ void DebugAPI::handleGetLoadedPlugins(const httplib::Request& req, httplib::Resp
 }
 
 void DebugAPI::handleGetRobotState(const httplib::Request& req, httplib::Response& res) {
-    auto* hardware_plugin = plugin_manager_.getPlugin("mujoco_hardware");
-    if (!hardware_plugin) {
-        res.status = 404;
-        res.set_content(R"({"error": "Hardware plugin not loaded"})", "application/json");
-        return;
-    }
-
-    auto* hardware = static_cast<rpf::Hardware*>(hardware_plugin->getService("Hardware"));
+    auto* hardware = getHardware();
     if (!hardware) {
-        res.status = 500;
-        res.set_content(R"({"error": "Hardware service not available"})", "application/json");
+        sendError(res, 404, "Hardware plugin not loaded");
         return;
     }
 
@@ -277,74 +296,62 @@ void DebugAPI::handleGetRobotState(const httplib::Request& req, httplib::Respons
 void DebugAPI::handleSetJointPosition(const httplib::Request& req, httplib::Response& res) {
     std::string joint_name = req.matches[1];
 
-    auto* hardware_plugin = plugin_manager_.getPlugin("mujoco_hardware");
-    if (!hardware_plugin) {
-        res.status = 404;
-        res.set_content(R"({"error": "Hardware plugin not loaded"})", "application/json");
-        return;
-    }
-
-    auto* hardware = static_cast<rpf::Hardware*>(hardware_plugin->getService("Hardware"));
+    auto* hardware = getHardware();
     if (!hardware) {
-        res.status = 500;
-        res.set_content(R"({"error": "Hardware service not available"})", "application/json");
+        sendError(res, 404, "Hardware plugin not loaded");
         return;
     }
 
     try {
         auto body = nlohmann::json::parse(req.body);
-        double position = body["position"];
+        if (!body.contains("position") || !body["position"].is_number()) {
+            sendError(res, 400, "Missing or invalid 'position' field");
+            return;
+        }
+        double position = body["position"].get<double>();
+        if (std::isnan(position) || std::isinf(position)) {
+            sendError(res, 400, "Invalid position value");
+            return;
+        }
         bool success = hardware->setJointPosition(joint_name, position);
-        nlohmann::json result = {{"success", success}, {"joint", joint_name}, {"position", position}};
-        res.set_content(result.dump(2), "application/json");
+        sendSuccess(res, {{"joint", joint_name}, {"position", position}});
     } catch (const std::exception& e) {
-        res.status = 400;
-        res.set_content(R"({"error": "Invalid request body"})", "application/json");
+        sendError(res, 400, "Invalid request body");
     }
 }
 
 void DebugAPI::handleSetJointPositions(const httplib::Request& req, httplib::Response& res) {
-    auto* hardware_plugin = plugin_manager_.getPlugin("mujoco_hardware");
-    if (!hardware_plugin) {
-        res.status = 404;
-        res.set_content(R"({"error": "Hardware plugin not loaded"})", "application/json");
-        return;
-    }
-
-    auto* hardware = static_cast<rpf::Hardware*>(hardware_plugin->getService("Hardware"));
+    auto* hardware = getHardware();
     if (!hardware) {
-        res.status = 500;
-        res.set_content(R"({"error": "Hardware service not available"})", "application/json");
+        sendError(res, 404, "Hardware plugin not loaded");
         return;
     }
 
     try {
         auto body = nlohmann::json::parse(req.body);
+        if (!body.is_object()) {
+            sendError(res, 400, "Request body must be a JSON object");
+            return;
+        }
         std::map<std::string, double> positions;
         for (auto& [key, value] : body.items()) {
+            if (!value.is_number()) {
+                sendError(res, 400, "Position values must be numbers");
+                return;
+            }
             positions[key] = value.get<double>();
         }
         bool success = hardware->setJointPositions(positions);
-        nlohmann::json result = {{"success", success}};
-        res.set_content(result.dump(2), "application/json");
+        sendSuccess(res);
     } catch (const std::exception& e) {
-        res.status = 400;
-        res.set_content(R"({"error": "Invalid request body"})", "application/json");
+        sendError(res, 400, "Invalid request body");
     }
 }
 
 void DebugAPI::handleGetSensorData(const httplib::Request& req, httplib::Response& res) {
-    auto* hardware_plugin = plugin_manager_.getPlugin("mujoco_hardware");
-    if (!hardware_plugin) {
-        res.status = 404;
-        res.set_content(R"({"error": "Hardware plugin not loaded"})", "application/json");
-        return;
-    }
-
-    auto* hardware = static_cast<rpf::Hardware*>(hardware_plugin->getService("Hardware"));
+    auto* hardware = getHardware();
     if (!hardware) {
-        res.status = 500;
-        res.set_content(R"({"error": "Hardware service not available"})", "application/json");
+        sendError(res, 404, "Hardware plugin not loaded");
         return;
     }
 
@@ -362,76 +369,60 @@ void DebugAPI::handleGetSensorData(const httplib::Request& req, httplib::Respons
 }
 
 void DebugAPI::handleStartSimulation(const httplib::Request& req, httplib::Response& res) {
-    auto* hardware_plugin = plugin_manager_.getPlugin("mujoco_hardware");
-    if (!hardware_plugin) {
-        res.status = 404;
-        res.set_content(R"({"error": "Hardware plugin not loaded"})", "application/json");
+    auto* hardware = getHardware();
+    if (!hardware) {
+        sendError(res, 404, "Hardware plugin not loaded");
         return;
     }
 
-    auto* simulator = static_cast<rpf::Simulator*>(hardware_plugin->getService("Simulator"));
-    if (!simulator) {
-        res.status = 500;
-        res.set_content(R"({"error": "Simulator service not available"})", "application/json");
-        return;
-    }
-
-    // 获取Hardware接口来启动仿真
-    auto* hardware = static_cast<rpf::Hardware*>(hardware_plugin->getService("Hardware"));
     bool success = hardware->startSimulation();
-    nlohmann::json result = {{"success", success}};
-    res.set_content(result.dump(2), "application/json");
+    sendSuccess(res);
 }
 
 void DebugAPI::handleStopSimulation(const httplib::Request& req, httplib::Response& res) {
-    auto* hardware_plugin = plugin_manager_.getPlugin("mujoco_hardware");
-    if (!hardware_plugin) {
-        res.status = 404;
-        res.set_content(R"({"error": "Hardware plugin not loaded"})", "application/json");
+    auto* hardware = getHardware();
+    if (!hardware) {
+        sendError(res, 404, "Hardware plugin not loaded");
         return;
     }
 
-    auto* hardware = static_cast<rpf::Hardware*>(hardware_plugin->getService("Hardware"));
     bool success = hardware->stopSimulation();
-    nlohmann::json result = {{"success", success}};
-    res.set_content(result.dump(2), "application/json");
+    sendSuccess(res);
 }
 
 void DebugAPI::handleResetSimulation(const httplib::Request& req, httplib::Response& res) {
-    auto* hardware_plugin = plugin_manager_.getPlugin("mujoco_hardware");
-    if (!hardware_plugin) {
-        res.status = 404;
-        res.set_content(R"({"error": "Hardware plugin not loaded"})", "application/json");
+    auto* hardware = getHardware();
+    if (!hardware) {
+        sendError(res, 404, "Hardware plugin not loaded");
         return;
     }
 
-    auto* hardware = static_cast<rpf::Hardware*>(hardware_plugin->getService("Hardware"));
     bool success = hardware->reset();
-    nlohmann::json result = {{"success", success}};
-    res.set_content(result.dump(2), "application/json");
+    sendSuccess(res);
 }
 
 void DebugAPI::handleStepSimulation(const httplib::Request& req, httplib::Response& res) {
-    auto* hardware_plugin = plugin_manager_.getPlugin("mujoco_hardware");
-    if (!hardware_plugin) {
-        res.status = 404;
-        res.set_content(R"({"error": "Hardware plugin not loaded"})", "application/json");
+    auto* hardware = getHardware();
+    if (!hardware) {
+        sendError(res, 404, "Hardware plugin not loaded");
         return;
     }
 
-    auto* hardware = static_cast<rpf::Hardware*>(hardware_plugin->getService("Hardware"));
     double dt = 0.001;
     if (!req.body.empty()) {
         try {
             auto body = nlohmann::json::parse(req.body);
             if (body.contains("dt")) {
                 dt = body["dt"].get<double>();
+                if (dt <= 0.0 || dt > 10.0) {
+                    sendError(res, 400, "dt must be in (0, 10]");
+                    return;
+                }
             }
         } catch (...) {}
     }
     bool success = hardware->stepSimulation(dt);
-    nlohmann::json result = {{"success", success}, {"dt", dt}};
-    res.set_content(result.dump(2), "application/json");
+    sendSuccess(res, {{"dt", dt}});
 }
 
 void DebugAPI::handleGetServices(const httplib::Request& req, httplib::Response& res) {
@@ -444,17 +435,23 @@ void DebugAPI::handleGetServices(const httplib::Request& req, httplib::Response&
 void DebugAPI::handlePublishEvent(const httplib::Request& req, httplib::Response& res) {
     try {
         auto body = nlohmann::json::parse(req.body);
-        std::string event = body["event"];
-        nlohmann::json data = body.value("data", nlohmann::json{});
+        if (!body.contains("event") || !body["event"].is_string()) {
+            sendError(res, 400, "Missing or invalid 'event' field");
+            return;
+        }
+        std::string event = body["event"].get<std::string>();
+        if (event.empty()) {
+            sendError(res, 400, "Event name cannot be empty");
+            return;
+        }
+        nlohmann::json data = body.value("data", nlohmann::json::object());
 
         auto& event_bus = plugin_manager_.getEventBus();
         event_bus.publish(event, data);
 
-        nlohmann::json result = {{"success", true}, {"event", event}};
-        res.set_content(result.dump(2), "application/json");
+        sendSuccess(res, {{"event", event}});
     } catch (const std::exception& e) {
-        res.status = 400;
-        res.set_content(R"({"error": "Invalid request body"})", "application/json");
+        sendError(res, 400, "Invalid request body");
     }
 }
 

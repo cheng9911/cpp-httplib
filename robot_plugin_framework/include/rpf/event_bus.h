@@ -8,6 +8,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <algorithm>
+#include <iostream>
 #include <nlohmann/json.hpp>
 
 namespace rpf {
@@ -41,13 +42,21 @@ public:
         }
     }
 
-    // 发布事件
-    void publish(const std::string& event, const nlohmann::json& data = {}) {
+    // 发布事件（带异常隔离）
+    void publish(const std::string& event, const nlohmann::json& data = nlohmann::json::object()) {
         std::shared_lock lock(mutex_);
         auto it = handlers_.find(event);
         if (it != handlers_.end()) {
             for (const auto& sub : it->second) {
-                sub.handler(event, data);
+                try {
+                    sub.handler(event, data);
+                } catch (const std::exception& e) {
+                    std::cerr << "EventBus: handler exception for event '"
+                              << event << "': " << e.what() << std::endl;
+                } catch (...) {
+                    std::cerr << "EventBus: unknown handler exception for event '"
+                              << event << "'" << std::endl;
+                }
             }
         }
     }

@@ -29,3 +29,8 @@ add_test(NAME test_event_bus COMMAND test_event_bus)
 add_executable(test_plugin_manager test_plugin_manager.cpp)
 target_link_libraries(test_plugin_manager PRIVATE rpf GTest::gtest_main)
 add_test(NAME test_plugin_manager COMMAND test_plugin_manager)
+
+# 综合测试
+add_executable(test_comprehensive test_comprehensive.cpp)
+target_link_libraries(test_comprehensive PRIVATE rpf GTest::gtest_main)
+add_test(NAME test_comprehensive COMMAND test_comprehensive WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
