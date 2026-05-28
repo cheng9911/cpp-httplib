@@ -1,0 +1,12 @@
+{
+    "name": "vision",
+    "version": "1.0.0",
+    "description": "视觉识别插件，支持目标检测和位姿估计",
+    "author": "Robot Team",
+    "license": "MIT",
+    "dependencies": [],
+    "provides": ["VisionDetector", "PoseEstimator"],
+    "category": "vision",
+    "platform": "all",
+    "entry_point": "create_plugin"
+}

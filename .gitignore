@@ -81,3 +81,4 @@ ipch
 .*
 !/.gitattributes
 !/.github
+/node_modules

@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Debug Console</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 {
+            text-align: center;
+            color: #00d4ff;
+            margin-bottom: 20px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        .card {
+            background: #16213e;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+        .card h2 {
+            color: #00d4ff;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+            border-bottom: 1px solid #0f3460;
+            padding-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .btn {
+            background: #0f3460;
+            color: #00d4ff;
+            border: 1px solid #00d4ff;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+            transition: all 0.3s;
+        }
+        .btn:hover { background: #00d4ff; color: #16213e; }
+        .btn.danger { border-color: #ff6b6b; color: #ff6b6b; }
+        .btn.danger:hover { background: #ff6b6b; color: #16213e; }
+        .btn.success { border-color: #51cf66; color: #51cf66; }
+        .btn.success:hover { background: #51cf66; color: #16213e; }
+        .btn.active { background: #00d4ff; color: #16213e; }
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            margin-bottom: 15px;
+            background: #0f3460;
+            border-radius: 5px;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-indicator.connected { background: #51cf66; }
+        .status-indicator.disconnected { background: #ff6b6b; }
+        .joint-control {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+            padding: 10px;
+            background: #0f3460;
+            border-radius: 5px;
+        }
+        .joint-control label { width: 80px; font-weight: bold; }
+        .joint-control input[type="range"] { flex: 1; margin: 0 10px; }
+        .joint-control .value {
+            width: 80px;
+            text-align: right;
+            font-family: monospace;
+        }
+        .chart-container {
+            position: relative;
+            height: 200px;
+            margin-top: 10px;
+        }
+        .sensor-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+        .sensor-card {
+            background: #0f3460;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .sensor-card .label { font-size: 0.8em; color: #888; }
+        .sensor-card .value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #00d4ff;
+            font-family: monospace;
+        }
+        .log {
+            background: #0a0a1a;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 0.9em;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .log-entry { margin: 2px 0; padding: 2px 5px; }
+        .log-entry.info { color: #00d4ff; }
+        .log-entry.success { color: #51cf66; }
+        .log-entry.error { color: #ff6b6b; }
+        .plugin-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            margin: 5px 0;
+            background: #0f3460;
+            border-radius: 5px;
+        }
+        .state-badge {
+            font-size: 0.8em;
+            padding: 2px 8px;
+            border-radius: 3px;
+        }
+        .state-Running { background: #51cf66; color: #000; }
+        .state-Initialized { background: #339af0; }
+        .state-Loaded { background: #ffd43b; color: #000; }
+        .state-Unloaded { background: #868e96; }
+        .auto-refresh { display: flex; align-items: center; gap: 10px; }
+        .toggle {
+            position: relative;
+            width: 40px;
+            height: 20px;
+            background: #0f3460;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .toggle.active { background: #51cf66; }
+        .toggle::after {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            background: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.3s;
+        }
+        .toggle.active::after { transform: translateX(20px); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Robot Debug Console - MuJoCo Visualization</h1>
+
+        <div class="status-bar">
+            <div>
+                <span class="status-indicator" id="connection-status"></span>
+                <span id="connection-text">Connecting...</span>
+            </div>
+            <div class="auto-refresh">
+                <span>Auto Refresh:</span>
+                <div class="toggle active" id="auto-refresh-toggle" onclick="toggleAutoRefresh()"></div>
+                <span id="refresh-rate">10 Hz</span>
+            </div>
+            <div>
+                <span>Simulation: </span>
+                <span id="sim-status" class="state-badge state-Unloaded">Unknown</span>
+            </div>
+        </div>
+
+        <div class="grid">
+            <!-- 插件管理 -->
+            <div class="card">
+                <h2>Plugin Management
+                    <button class="btn" onclick="scanPlugins()">Scan</button>
+                </h2>
+                <div id="plugins-list"></div>
+            </div>
+
+            <!-- 仿真控制 -->
+            <div class="card">
+                <h2>Simulation Control</h2>
+                <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                    <button class="btn success" onclick="startSimulation()">▶ Auto Run</button>
+                    <button class="btn danger" onclick="stopSimulation()">⏹ Stop</button>
+                    <button class="btn" onclick="resetSimulation()">↺ Reset</button>
+                </div>
+                <div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 10px;">
+                    <button class="btn" onclick="stepSimulation()">⏭ Step x1</button>
+                    <button class="btn" onclick="stepMultiple(5)">⏭ Step x5</button>
+                    <button class="btn" onclick="stepMultiple(10)">⏭ Step x10</button>
+                    <button class="btn" onclick="stepMultiple(50)">⏭ Step x50</button>
+                </div>
+                <div style="margin-top: 15px;">
+                    <label>Time: <span id="sim-time">0.000</span>s</label>
+                    <label style="margin-left: 20px;">Mode: <span id="sim-mode">Manual</span></label>
+                </div>
+            </div>
+
+            <!-- 关节控制 -->
+            <div class="card">
+                <h2>Joint Control</h2>
+                <div id="joint-controls">
+                    <p style="color: #888;">Load mujoco_hardware plugin first</p>
+                </div>
+            </div>
+
+            <!-- 关节状态图表 -->
+            <div class="card">
+                <h2>Joint Positions Chart</h2>
+                <div class="chart-container">
+                    <canvas id="jointChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 传感器数据 -->
+            <div class="card">
+                <h2>Sensor Data</h2>
+                <div class="sensor-grid" id="sensor-data">
+                    <div class="sensor-card">
+                        <div class="label">Force X</div>
+                        <div class="value" id="force-x">0.00</div>
+                    </div>
+                    <div class="sensor-card">
+                        <div class="label">Force Y</div>
+                        <div class="value" id="force-y">0.00</div>
+                    </div>
+                    <div class="sensor-card">
+                        <div class="label">Force Z</div>
+                        <div class="value" id="force-z">0.00</div>
+                    </div>
+                    <div class="sensor-card">
+                        <div class="label">Accel X</div>
+                        <div class="value" id="accel-x">0.00</div>
+                    </div>
+                    <div class="sensor-card">
+                        <div class="label">Accel Y</div>
+                        <div class="value" id="accel-y">0.00</div>
+                    </div>
+                    <div class="sensor-card">
+                        <div class="label">Accel Z</div>
+                        <div class="value" id="accel-z">9.81</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 力矩图表 -->
+            <div class="card">
+                <h2>Joint Efforts Chart</h2>
+                <div class="chart-container">
+                    <canvas id="effortChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 日志 -->
+            <div class="card" style="grid-column: span 2;">
+                <h2>Log
+                    <button class="btn" onclick="clearLog()">Clear</button>
+                </h2>
+                <div id="log" class="log"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8080/api';
+        let joints = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6'];
+        let autoRefresh = true;
+        let refreshInterval = null;
+        let jointChart = null;
+        let effortChart = null;
+
+        // 图表数据
+        const maxDataPoints = 50;
+        const chartData = {
+            labels: [],
+            positions: joints.map(() => []),
+            efforts: joints.map(() => [])
+        };
+
+        // 颜色配置
+        const colors = [
+            '#ff6384', '#36a2eb', '#ffce56', '#4bc0c0', '#9966ff', '#ff9f40'
+        ];
+
+        // 初始化图表
+        function initCharts() {
+            const jointCtx = document.getElementById('jointChart').getContext('2d');
+            jointChart = new Chart(jointCtx, {
+                type: 'line',
+                data: {
+                    labels: chartData.labels,
+                    datasets: joints.map((joint, i) => ({
+                        label: joint,
+                        data: chartData.positions[i],
+                        borderColor: colors[i],
+                        backgroundColor: colors[i] + '20',
+                        borderWidth: 2,
+                        fill: false,
+                        tension: 0.4
+                    }))
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: { duration: 0 },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: { color: '#0f3460' },
+                            ticks: { color: '#888' }
+                        },
+                        x: {
+                            grid: { color: '#0f3460' },
+                            ticks: { color: '#888', display: false }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            labels: { color: '#eee', boxWidth: 12 }
+                        }
+                    }
+                }
+            });
+
+            const effortCtx = document.getElementById('effortChart').getContext('2d');
+            effortChart = new Chart(effortCtx, {
+                type: 'line',
+                data: {
+                    labels: chartData.labels,
+                    datasets: joints.map((joint, i) => ({
+                        label: joint,
+                        data: chartData.efforts[i],
+                        borderColor: colors[i],
+                        backgroundColor: colors[i] + '20',
+                        borderWidth: 2,
+                        fill: false,
+                        tension: 0.4
+                    }))
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: { duration: 0 },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: { color: '#0f3460' },
+                            ticks: { color: '#888' }
+                        },
+                        x: {
+                            grid: { color: '#0f3460' },
+                            ticks: { color: '#888', display: false }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            labels: { color: '#eee', boxWidth: 12 }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 日志函数
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+            if (logDiv.children.length > 100) {
+                logDiv.removeChild(logDiv.firstChild);
+            }
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        // API 请求函数
+        async function apiRequest(endpoint, method = 'GET', body = null) {
+            try {
+                const options = { method };
+                if (body) {
+                    options.headers = { 'Content-Type': 'application/json' };
+                    options.body = JSON.stringify(body);
+                }
+                const response = await fetch(`${API_BASE}${endpoint}`, options);
+                const data = await response.json();
+                updateConnectionStatus(true);
+                return data;
+            } catch (error) {
+                updateConnectionStatus(false);
+                return null;
+            }
+        }
+
+        function updateConnectionStatus(connected) {
+            const indicator = document.getElementById('connection-status');
+            const text = document.getElementById('connection-text');
+            indicator.className = `status-indicator ${connected ? 'connected' : 'disconnected'}`;
+            text.textContent = connected ? 'Connected' : 'Disconnected';
+        }
+
+        // 自动刷新控制
+        function toggleAutoRefresh() {
+            autoRefresh = !autoRefresh;
+            const toggle = document.getElementById('auto-refresh-toggle');
+            toggle.classList.toggle('active', autoRefresh);
+            if (autoRefresh) {
+                startAutoRefresh();
+            } else {
+                stopAutoRefresh();
+            }
+        }
+
+        function startAutoRefresh() {
+            if (refreshInterval) return;
+            refreshInterval = setInterval(async () => {
+                await updateRobotState();
+                await updateSensorData();
+            }, 100);
+        }
+
+        function stopAutoRefresh() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+        }
+
+        // 插件管理
+        async function scanPlugins() {
+            const plugins = await apiRequest('/plugins/scan');
+            if (!plugins) return;
+
+            const listDiv = document.getElementById('plugins-list');
+            listDiv.innerHTML = '';
+
+            for (const plugin of plugins) {
+                const state = await apiRequest(`/plugins/${plugin.name}/state`);
+                const item = document.createElement('div');
+                item.className = 'plugin-item';
+                item.innerHTML = `
+                    <div>
+                        <strong>${plugin.name}</strong> v${plugin.version}
+                        <span class="state-badge state-${state?.state || 'Unknown'}">${state?.state || 'Unknown'}</span>
+                    </div>
+                    <div>
+                        <button class="btn" onclick="loadPlugin('${plugin.name}')">Load</button>
+                        <button class="btn success" onclick="startPlugin('${plugin.name}')">Start</button>
+                    </div>
+                `;
+                listDiv.appendChild(item);
+            }
+            log(`Found ${plugins.length} plugins`);
+        }
+
+        async function loadPlugin(name) {
+            const result = await apiRequest(`/plugins/${name}/load`, 'POST');
+            if (result?.success) {
+                log(`Plugin ${name} loaded`, 'success');
+                scanPlugins();
+                if (name === 'mujoco_hardware') {
+                    initJointControls();
+                }
+            } else {
+                log(`Failed to load plugin ${name}`, 'error');
+            }
+        }
+
+        async function startPlugin(name) {
+            const result = await apiRequest(`/plugins/${name}/start`, 'POST');
+            if (result?.success) {
+                log(`Plugin ${name} ${result.message || 'started'}`, 'success');
+                scanPlugins();
+                if (name === 'mujoco_hardware') {
+                    initJointControls();
+                    startAutoRefresh();
+                }
+            } else {
+                log(`Failed to start plugin ${name}`, 'error');
+            }
+        }
+
+        // 关节控制
+        function initJointControls() {
+            const controlsDiv = document.getElementById('joint-controls');
+            controlsDiv.innerHTML = '';
+
+            joints.forEach((joint, index) => {
+                const control = document.createElement('div');
+                control.className = 'joint-control';
+                control.innerHTML = `
+                    <label>${joint}</label>
+                    <input type="range" id="joint-${index}" min="-3.14" max="3.14" step="0.01" value="0"
+                           oninput="updateJointValue(${index})">
+                    <span class="value" id="joint-value-${index}">0.00 rad</span>
+                    <button class="btn" onclick="setJointPosition('${joint}', ${index})">Set</button>
+                `;
+                controlsDiv.appendChild(control);
+            });
+        }
+
+        function updateJointValue(index) {
+            const slider = document.getElementById(`joint-${index}`);
+            const valueSpan = document.getElementById(`joint-value-${index}`);
+            valueSpan.textContent = parseFloat(slider.value).toFixed(2) + ' rad';
+        }
+
+        async function setJointPosition(jointName, index) {
+            const slider = document.getElementById(`joint-${index}`);
+            const position = parseFloat(slider.value);
+            await apiRequest(`/robot/joints/${jointName}/position`, 'POST', { position });
+        }
+
+        // 仿真控制
+        async function startSimulation() {
+            const result = await apiRequest('/simulation/start', 'POST');
+            if (result?.success) {
+                log('Simulation started (Auto)', 'success');
+                updateSimulationStatus('Running');
+                document.getElementById('sim-mode').textContent = 'Auto';
+            }
+        }
+
+        async function stopSimulation() {
+            const result = await apiRequest('/simulation/stop', 'POST');
+            if (result?.success) {
+                log('Simulation stopped', 'success');
+                updateSimulationStatus('Stopped');
+                document.getElementById('sim-mode').textContent = 'Manual';
+            }
+        }
+
+        async function resetSimulation() {
+            const result = await apiRequest('/simulation/reset', 'POST');
+            if (result?.success) {
+                log('Simulation reset', 'success');
+                // 清空图表数据
+                chartData.labels = [];
+                chartData.positions.forEach(arr => arr.length = 0);
+                chartData.efforts.forEach(arr => arr.length = 0);
+                jointChart.update();
+                effortChart.update();
+                document.getElementById('sim-mode').textContent = 'Manual';
+            }
+        }
+
+        async function stepSimulation() {
+            // 先停止自动仿真，以便观察手动step效果
+            await apiRequest('/simulation/stop', 'POST');
+            updateSimulationStatus('Stopped');
+
+            const result = await apiRequest('/simulation/step', 'POST', { dt: 0.1 });
+            if (result?.success) {
+                log(`Simulation stepped: dt=${result.dt}s`, 'success');
+                // 立即更新状态显示
+                await updateRobotState();
+            } else {
+                log('Failed to step simulation', 'error');
+            }
+        }
+
+        // 批量步进
+        async function stepMultiple(times) {
+            await apiRequest('/simulation/stop', 'POST');
+            updateSimulationStatus('Stopped');
+
+            for (let i = 0; i < times; i++) {
+                await apiRequest('/simulation/step', 'POST', { dt: 0.1 });
+                await updateRobotState();
+                await new Promise(resolve => setTimeout(resolve, 50)); // 短暂延迟以便观察
+            }
+            log(`Stepped ${times} times`, 'success');
+        }
+
+        function updateSimulationStatus(status) {
+            const badge = document.getElementById('sim-status');
+            badge.textContent = status;
+            badge.className = `state-badge state-${status}`;
+        }
+
+        // 更新机器人状态
+        async function updateRobotState() {
+            const state = await apiRequest('/robot/state');
+            if (!state) return;
+
+            // 更新时间
+            document.getElementById('sim-time').textContent = state.timestamp.toFixed(3);
+
+            // 更新仿真状态
+            updateSimulationStatus(state.is_moving ? 'Running' : 'Stopped');
+
+            // 更新滑块位置
+            state.joints.forEach((joint, index) => {
+                const slider = document.getElementById(`joint-${index}`);
+                if (slider && document.activeElement !== slider) {
+                    slider.value = joint.position;
+                    updateJointValue(index);
+                }
+            });
+
+            // 更新图表数据
+            const timeLabel = state.timestamp.toFixed(1);
+            chartData.labels.push(timeLabel);
+            if (chartData.labels.length > maxDataPoints) {
+                chartData.labels.shift();
+            }
+
+            state.joints.forEach((joint, index) => {
+                chartData.positions[index].push(joint.position);
+                chartData.efforts[index].push(joint.effort);
+                if (chartData.positions[index].length > maxDataPoints) {
+                    chartData.positions[index].shift();
+                    chartData.efforts[index].shift();
+                }
+            });
+
+            jointChart.update();
+            effortChart.update();
+        }
+
+        // 更新传感器数据
+        async function updateSensorData() {
+            const sensors = await apiRequest('/robot/sensors');
+            if (!sensors) return;
+
+            sensors.forEach(sensor => {
+                if (sensor.name === 'force_sensor' && sensor.values.length >= 3) {
+                    document.getElementById('force-x').textContent = sensor.values[0].toFixed(2);
+                    document.getElementById('force-y').textContent = sensor.values[1].toFixed(2);
+                    document.getElementById('force-z').textContent = sensor.values[2].toFixed(2);
+                }
+                if (sensor.name === 'imu' && sensor.values.length >= 6) {
+                    document.getElementById('accel-x').textContent = sensor.values[0].toFixed(2);
+                    document.getElementById('accel-y').textContent = sensor.values[1].toFixed(2);
+                    document.getElementById('accel-z').textContent = sensor.values[2].toFixed(2);
+                }
+            });
+        }
+
+        // 初始化
+        window.onload = () => {
+            initCharts();
+            log('Debug console initialized');
+
+            // 自动扫描插件
+            scanPlugins().then(() => {
+                // 尝试自动加载和启动mujoco_hardware
+                setTimeout(async () => {
+                    await loadPlugin('mujoco_hardware');
+                    await startPlugin('mujoco_hardware');
+                }, 500);
+            });
+
+            startAutoRefresh();
+        };
+    </script>
+</body>
+</html>

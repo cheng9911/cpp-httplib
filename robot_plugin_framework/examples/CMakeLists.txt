@@ -1,0 +1,5 @@
+add_subdirectory(motion_control_plugin)
+add_subdirectory(vision_plugin)
+add_subdirectory(mujoco_hardware_plugin)
+add_subdirectory(host_app)
+add_subdirectory(debug_server)

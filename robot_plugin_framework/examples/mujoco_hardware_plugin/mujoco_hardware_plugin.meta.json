@@ -1,0 +1,12 @@
+{
+    "name": "mujoco_hardware",
+    "version": "1.0.0",
+    "description": "MuJoCo仿真硬件抽象层插件，提供机器人仿真环境",
+    "author": "Robot Team",
+    "license": "MIT",
+    "dependencies": [],
+    "provides": ["Hardware", "Simulator"],
+    "category": "hardware",
+    "platform": "all",
+    "entry_point": "create_plugin"
+}

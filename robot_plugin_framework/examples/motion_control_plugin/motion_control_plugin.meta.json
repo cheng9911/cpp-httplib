@@ -1,0 +1,12 @@
+{
+    "name": "motion_control",
+    "version": "1.0.0",
+    "description": "机器人运动控制插件，支持关节控制和轨迹规划",
+    "author": "Robot Team",
+    "license": "MIT",
+    "dependencies": [],
+    "provides": ["MotionController", "TrajectoryPlanner"],
+    "category": "motion",
+    "platform": "all",
+    "entry_point": "create_plugin"
+}
