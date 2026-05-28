@@ -1,4 +1,5 @@
 #include "debug_api.h"
+#include "rpf/hardware_interface.h"
 #include <iostream>
 #include <filesystem>
 #include <signal.h>
@@ -58,6 +59,16 @@ int main(int argc, char* argv[]) {
             plugin_manager.initializePlugin(meta.name);
             plugin_manager.startPlugin(meta.name);
             std::cout << "  -> Started" << std::endl;
+
+            // 自动启动仿真线程
+            auto* plugin = plugin_manager.getPlugin(meta.name);
+            if (plugin) {
+                auto* hw = static_cast<rpf::Hardware*>(plugin->getService("Hardware"));
+                if (hw) {
+                    hw->startSimulation();
+                    std::cout << "  -> Simulation started" << std::endl;
+                }
+            }
         } else {
             std::cerr << "  -> Failed to load" << std::endl;
         }
@@ -68,15 +79,28 @@ int main(int argc, char* argv[]) {
 
     std::cout << "\nStarting debug server..." << std::endl;
     std::cout << "API endpoints:" << std::endl;
-    std::cout << "  GET  /api/plugins/scan           - Scan available plugins" << std::endl;
-    std::cout << "  GET  /api/plugins/loaded          - Get loaded plugins" << std::endl;
-    std::cout << "  GET  /api/robot/state             - Get robot state" << std::endl;
-    std::cout << "  GET  /api/robot/sensors           - Get sensor data" << std::endl;
+    std::cout << "  ---- Plugin Management ----" << std::endl;
+    std::cout << "  GET  /api/plugins/scan               - Scan available plugins" << std::endl;
+    std::cout << "  GET  /api/plugins/loaded              - Get loaded plugins" << std::endl;
+    std::cout << "  POST /api/plugins/{name}/start        - Start plugin" << std::endl;
+    std::cout << "  ---- Hardware Interface ----" << std::endl;
+    std::cout << "  GET  /api/robot/state                 - Get robot state" << std::endl;
+    std::cout << "  GET  /api/robot/sensors               - Get sensor data" << std::endl;
     std::cout << "  POST /api/robot/joints/{name}/position - Set joint position" << std::endl;
-    std::cout << "  POST /api/simulation/start        - Start simulation" << std::endl;
-    std::cout << "  POST /api/simulation/stop         - Stop simulation" << std::endl;
-    std::cout << "  POST /api/simulation/reset        - Reset simulation" << std::endl;
-    std::cout << "\nPress Ctrl+C to stop" << std::endl;
+    std::cout << "  POST /api/robot/joints/positions      - Set batch positions" << std::endl;
+    std::cout << "  ---- Simulation Control ----" << std::endl;
+    std::cout << "  POST /api/simulation/start            - Start simulation" << std::endl;
+    std::cout << "  POST /api/simulation/stop             - Stop simulation" << std::endl;
+    std::cout << "  POST /api/simulation/reset            - Reset simulation" << std::endl;
+    std::cout << "  POST /api/simulation/step             - Step simulation" << std::endl;
+    std::cout << "  ---- Motion Planning ----" << std::endl;
+    std::cout << "  POST /api/motion/plan                 - Plan & execute trajectory" << std::endl;
+    std::cout << "  POST /api/motion/stop                 - Stop motion" << std::endl;
+    std::cout << "  GET  /api/motion/presets               - List preset motions" << std::endl;
+    std::cout << "  POST /api/motion/preset/{name}        - Execute preset motion" << std::endl;
+    std::cout << "  GET  /api/motion/status               - Get motion status" << std::endl;
+    std::cout << "\nWeb UI: open examples/debug_server/web/index.html" << std::endl;
+    std::cout << "Press Ctrl+C to stop" << std::endl;
 
     if (!debug_api->start()) {
         std::cerr << "Failed to start debug server" << std::endl;

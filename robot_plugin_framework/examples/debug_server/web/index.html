@@ -225,6 +225,61 @@
                 </div>
             </div>
 
+            <!-- 运动规划 -->
+            <div class="card" style="grid-column: span 2;">
+                <h2>Motion Planning
+                    <span id="motion-status" class="state-badge state-Unloaded">Idle</span>
+                </h2>
+
+                <!-- 预设动作 -->
+                <div style="margin-bottom: 15px;">
+                    <label style="color: #888; margin-bottom: 8px; display: block;">Preset Motions:</label>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                        <button class="btn success" onclick="executePreset('home')" id="btn-home">🏠 Home</button>
+                        <button class="btn" onclick="executePreset('ready')" id="btn-ready">🔧 Ready</button>
+                        <button class="btn" onclick="executePreset('wave')" id="btn-wave">👋 Wave</button>
+                        <button class="btn" onclick="executePreset('point')" id="btn-point">👉 Point</button>
+                        <button class="btn" onclick="executePreset('fold')" id="btn-fold">📦 Fold</button>
+                        <button class="btn danger" onclick="stopMotion()">⏹ Stop Motion</button>
+                    </div>
+                </div>
+
+                <!-- 自定义轨迹 -->
+                <div style="margin-bottom: 15px;">
+                    <label style="color: #888; margin-bottom: 8px; display: block;">Custom Trajectory:</label>
+                    <div id="target-inputs" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px;">
+                        <!-- 由 JS 动态生成 -->
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <div style="flex: 1;">
+                            <label>Duration: <span id="duration-value">2.0</span>s</label>
+                            <input type="range" id="duration-slider" min="0.5" max="5.0" step="0.1" value="2.0"
+                                   oninput="document.getElementById('duration-value').textContent = this.value"
+                                   style="width: 100%;">
+                        </div>
+                        <button class="btn success" onclick="planAndExecute()" id="btn-execute">▶ Plan & Execute</button>
+                    </div>
+                </div>
+
+                <!-- 进度条 -->
+                <div style="margin-bottom: 10px;">
+                    <label style="color: #888;">Progress:</label>
+                    <div style="background: #0f3460; border-radius: 5px; height: 20px; overflow: hidden; margin-top: 5px;">
+                        <div id="motion-progress" style="background: linear-gradient(90deg, #00d4ff, #51cf66); height: 100%; width: 0%; transition: width 0.1s; text-align: center; line-height: 20px; font-size: 0.8em;">0%</div>
+                    </div>
+                </div>
+
+                <!-- 快速设置目标 -->
+                <div>
+                    <label style="color: #888; margin-bottom: 8px; display: block;">Quick Set from Current:</label>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="btn" onclick="fillTargetFromCurrent()">📋 Copy Current → Target</button>
+                        <button class="btn" onclick="fillTargetZeros()">🔄 Target Zeros</button>
+                        <button class="btn" onclick="swapStartTarget()">🔀 Swap Start/Target</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- 关节状态图表 -->
             <div class="card">
                 <h2>Joint Positions Chart</h2>
@@ -283,7 +338,10 @@
     </div>
 
     <script>
-        const API_BASE = 'http://localhost:8080/api';
+        // 自动检测 API 端口：URL 参数 ?port=8080 或默认 8080
+        const urlParams = new URLSearchParams(window.location.search);
+        const apiPort = urlParams.get('port') || '8080';
+        const API_BASE = `http://${window.location.hostname}:${apiPort}/api`;
         let joints = ['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6'];
         let autoRefresh = true;
         let refreshInterval = null;
@@ -410,10 +468,14 @@
                 const response = await fetch(`${API_BASE}${endpoint}`, options);
                 const data = await response.json();
                 updateConnectionStatus(true);
+                if (!data.success && !data.error) {
+                    data.error = `HTTP ${response.status}`;
+                }
                 return data;
             } catch (error) {
                 updateConnectionStatus(false);
-                return null;
+                log(`API Error: ${error.message}`, 'error');
+                return { success: false, error: error.message };
             }
         }
 
@@ -517,7 +579,7 @@
                     <label>${joint}</label>
                     <input type="range" id="joint-${index}" min="-3.14" max="3.14" step="0.01" value="0"
                            oninput="updateJointValue(${index})">
-                    <span class="value" id="joint-value-${index}">0.00 rad</span>
+                    <span class="value" id="joint-value-${index}">T:0.00 C:0.00</span>
                     <button class="btn" onclick="setJointPosition('${joint}', ${index})">Set</button>
                 `;
                 controlsDiv.appendChild(control);
@@ -527,13 +589,14 @@
         function updateJointValue(index) {
             const slider = document.getElementById(`joint-${index}`);
             const valueSpan = document.getElementById(`joint-value-${index}`);
-            valueSpan.textContent = parseFloat(slider.value).toFixed(2) + ' rad';
+            const current = currentPositions[index] !== undefined ? currentPositions[index].toFixed(2) : '0.00';
+            valueSpan.textContent = `T:${parseFloat(slider.value).toFixed(2)} C:${current}`;
         }
 
         async function setJointPosition(jointName, index) {
             const slider = document.getElementById(`joint-${index}`);
             const position = parseFloat(slider.value);
-            await apiRequest(`/robot/joints/${jointName}/position`, 'POST', { position });
+            await apiRequest(`/robot/joints/${jointName}/position?value=${position}`);
         }
 
         // 仿真控制
@@ -614,13 +677,10 @@
             // 更新仿真状态
             updateSimulationStatus(state.is_moving ? 'Running' : 'Stopped');
 
-            // 更新滑块位置
+            // 更新当前位置数组和显示（不覆盖滑条目标值）
             state.joints.forEach((joint, index) => {
-                const slider = document.getElementById(`joint-${index}`);
-                if (slider && document.activeElement !== slider) {
-                    slider.value = joint.position;
-                    updateJointValue(index);
-                }
+                currentPositions[index] = joint.position;
+                updateJointValue(index);
             });
 
             // 更新图表数据
@@ -662,9 +722,152 @@
             });
         }
 
+        // ===== 运动规划功能 =====
+
+        // 当前目标位置
+        let targetPositions = [0, 0, 0, 0, 0, 0];
+        let currentPositions = [0, 0, 0, 0, 0, 0];
+
+        // 初始化目标输入框
+        function initTargetInputs() {
+            const container = document.getElementById('target-inputs');
+            container.innerHTML = '';
+            joints.forEach((joint, i) => {
+                const div = document.createElement('div');
+                div.style.cssText = 'display: flex; align-items: center; gap: 5px;';
+                div.innerHTML = `
+                    <label style="width: 50px; font-size: 0.8em;">${joint}</label>
+                    <input type="number" id="target-${i}" value="0.00" step="0.1" min="-3.14" max="3.14"
+                           style="width: 80px; background: #0f3460; color: #eee; border: 1px solid #00d4ff; border-radius: 3px; padding: 4px; font-family: monospace;">
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        // 从当前位置填充目标
+        function fillTargetFromCurrent() {
+            for (let i = 0; i < 6; i++) {
+                const input = document.getElementById(`target-${i}`);
+                if (input) {
+                    input.value = currentPositions[i].toFixed(2);
+                }
+            }
+            log('Copied current positions to target');
+        }
+
+        // 目标归零
+        function fillTargetZeros() {
+            for (let i = 0; i < 6; i++) {
+                const input = document.getElementById(`target-${i}`);
+                if (input) input.value = '0.00';
+            }
+            log('Target positions set to zero');
+        }
+
+        // 交换起点和目标
+        function swapStartTarget() {
+            for (let i = 0; i < 6; i++) {
+                const input = document.getElementById(`target-${i}`);
+                if (input) {
+                    const tmp = currentPositions[i].toFixed(2);
+                    // 设置当前位置为目标（通过 API）
+                    input.value = tmp;
+                }
+            }
+            log('Swapped start/target positions');
+        }
+
+        // 规划并执行轨迹
+        async function planAndExecute() {
+            const target = [];
+            for (let i = 0; i < 6; i++) {
+                const input = document.getElementById(`target-${i}`);
+                target.push(parseFloat(input?.value || 0));
+            }
+            const duration = parseFloat(document.getElementById('duration-slider').value);
+
+            const targetStr = target.map(v => v.toFixed(3)).join(',');
+            log(`Planning trajectory: target=[${target.map(v => v.toFixed(2)).join(', ')}], duration=${duration}s`);
+
+            const result = await apiRequest(`/motion/plan?target=${targetStr}&duration=${duration}`);
+
+            if (result?.success) {
+                log(`Trajectory execution started (${duration}s)`, 'success');
+                startMotionStatusPolling();
+            } else {
+                log(`Failed: ${result?.error || 'Unknown error'}`, 'error');
+            }
+        }
+
+        // 执行预设动作
+        async function executePreset(name) {
+            log(`Executing preset: ${name}`);
+            const result = await apiRequest(`/motion/preset/${name}`, 'POST');
+            if (result?.success) {
+                log(`Preset '${name}' started (${result.duration}s)`, 'success');
+                startMotionStatusPolling();
+            } else {
+                log(`Failed: ${result?.error || 'Unknown error'}`, 'error');
+            }
+        }
+
+        // 停止运动
+        async function stopMotion() {
+            const result = await apiRequest('/motion/stop', 'POST');
+            if (result?.success) {
+                log('Motion stopped', 'success');
+                stopMotionStatusPolling();
+            }
+        }
+
+        // 运动状态轮询
+        let motionPollInterval = null;
+
+        function startMotionStatusPolling() {
+            if (motionPollInterval) return;
+            updateMotionStatusBadge('Running');
+            motionPollInterval = setInterval(async () => {
+                const status = await apiRequest('/motion/status');
+                if (status) {
+                    const progress = status.progress || 0;
+                    const bar = document.getElementById('motion-progress');
+                    if (bar) {
+                        bar.style.width = progress.toFixed(1) + '%';
+                        bar.textContent = progress.toFixed(1) + '%';
+                    }
+                    if (!status.executing) {
+                        stopMotionStatusPolling();
+                        log('Motion completed', 'success');
+                    }
+                }
+            }, 100);
+        }
+
+        function stopMotionStatusPolling() {
+            if (motionPollInterval) {
+                clearInterval(motionPollInterval);
+                motionPollInterval = null;
+            }
+            updateMotionStatusBadge('Idle');
+            const bar = document.getElementById('motion-progress');
+            if (bar) {
+                bar.style.width = '0%';
+                bar.textContent = '0%';
+            }
+        }
+
+        function updateMotionStatusBadge(status) {
+            const badge = document.getElementById('motion-status');
+            if (badge) {
+                badge.textContent = status;
+                badge.className = `state-badge state-${status === 'Running' ? 'Running' : 'Unloaded'}`;
+            }
+        }
+
         // 初始化
         window.onload = () => {
             initCharts();
+            initTargetInputs();
             log('Debug console initialized');
 
             // 自动扫描插件

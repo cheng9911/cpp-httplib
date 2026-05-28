@@ -54,12 +54,29 @@ private:
     void handleGetServices(const httplib::Request& req, httplib::Response& res);
     void handlePublishEvent(const httplib::Request& req, httplib::Response& res);
 
+    // 运动规划API
+    void handlePlanAndExecute(const httplib::Request& req, httplib::Response& res);
+    void handleStopMotion(const httplib::Request& req, httplib::Response& res);
+    void handleGetPresets(const httplib::Request& req, httplib::Response& res);
+    void handleExecutePreset(const httplib::Request& req, httplib::Response& res);
+    void handleGetMotionStatus(const httplib::Request& req, httplib::Response& res);
+
+    // 运动执行
+    void executeTrajectory(const std::vector<std::vector<double>>& waypoints, double duration);
+
     rpf::PluginManager& plugin_manager_;
     std::unique_ptr<httplib::Server> server_;
     std::string hardware_plugin_name_;
     int port_;
     bool running_;
     std::thread server_thread_;
+
+    // 运动执行状态
+    std::atomic<bool> motion_executing_{false};
+    std::atomic<bool> motion_stop_requested_{false};
+    std::atomic<double> motion_progress_{0.0};
+    std::thread motion_thread_;
+    std::mutex motion_mutex_;
 };
 
 } // namespace robot

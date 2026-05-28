@@ -184,14 +184,12 @@ public:
     bool stepSimulation(double dt) override {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        // 仿真步进：使用低增益PD控制，增加阻尼使运动更平滑
         for (auto& [name, state] : joint_states_) {
             auto target_it = joint_targets_.find(name);
             if (target_it != joint_targets_.end()) {
                 double error = target_it->second - state.position;
-                // 极低增益PD控制：Kp=0.1, Kd=0.5 (更高阻尼)
-                double Kp = 0.1;
-                double Kd = 0.5;
+                double Kp = 2.0;
+                double Kd = 2.0;
                 state.effort = Kp * error - Kd * state.velocity;
                 state.velocity += state.effort * dt;
                 state.position += state.velocity * dt;
@@ -220,12 +218,12 @@ public:
             return true;
         }
         simulating_ = true;
-        // 使用较慢的仿真频率 (2Hz)，步长0.5秒
+        // 仿真频率 100Hz，步长0.01秒
         simulation_thread_ = std::thread([this]() {
-            std::cout << "[MuJoCo] Simulation thread started (2Hz)" << std::endl;
+            std::cout << "[MuJoCo] Simulation thread started (100Hz)" << std::endl;
             while (simulating_) {
-                stepSimulation(0.5);  // 0.5秒步长
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));  // 500ms = 2Hz
+                stepSimulation(0.01);  // 0.01秒步长
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));  // 10ms = 100Hz
             }
             std::cout << "[MuJoCo] Simulation thread stopped" << std::endl;
         });
